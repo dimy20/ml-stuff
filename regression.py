@@ -73,10 +73,21 @@ def gradient_descent(x, y, w_in, b_in: float, learning_rate, num_iters):
 
     return w, b, cost_history
 
+def znormalize(x):
+    #take the mean of each feature aka: compute the mean per column:
+    mean = np.mean(x, axis=0)
+    #take the standartd deviation of each feature aka: compute the std deviation per column:
+    std_deviation = np.std(x, axis=0)
+    # apply the z normalization to each feature: (x - mu / sgma) 
+    #numpy takes care of doing this operation component-wise for each input vector.
+    return (x - mean) / std_deviation
+
 def main():
-    iterations = 100
-    learning_rate = 5.0e-7
-    w_final, b_final, history = gradient_descent(x_train, y_train, np.zeros_like(w_init), 0., learning_rate, iterations)
+    iterations = 200
+    #learning_rate = 5.0e-7
+    learning_rate = 0.1
+    nx_train = znormalize(x_train)
+    w_final, b_final, history = gradient_descent(nx_train, y_train, np.zeros_like(w_init), 0., learning_rate, iterations)
 
     plt.plot(x_axis, history)
     plt.xlabel("iterations")
@@ -85,7 +96,7 @@ def main():
     #test
     m,_ = x_train.shape
     for i in range(m):
-        print(f"prediction: {np.dot(x_train[i], w_final) + b_final:0.2f}, target value: {y_train[i]}")
+        print(f"prediction: {np.dot(nx_train[i], w_final) + b_final:0.2f}, target value: {y_train[i]}")
 
     plt.show()
 
