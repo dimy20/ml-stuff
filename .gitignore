@@ -1,2 +1,3 @@
 venv
 *.torrent
+__pycache__
