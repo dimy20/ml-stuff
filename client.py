@@ -16,7 +16,17 @@ PORT = 6687
 
 class State(int, Enum):
     IDDLE = 0,
-    CONNECTED = 0
+    CONNECTED = 1
+    WAITING_ANNOUNCE_RESPONSE = 2
+    # We consider this client to be connected when:
+    # (1) => We dont care about the best tracker (Larget swarm) and we have received a sucessfull connect response from any tracker.
+    #        Tipically this would be the first one to respond back or the only available tracker if announce-list has only one element.
+    # (2) => We care about the best tracker (Largest swarm) and announce-list length is greater than one.
+    #        In that case the client state is set to BEST_TRACKER_DISCOVERY, and the state will be changed to CONNECTED once we have found the best tracker.
+    # Criteria for best tracker:
+    # Currently the client will care only about the number of seeders and leechers to make this decision
+    # Makes sense?
+    BEST_TRACKER_DISCOVERY = 3
 
 class Event(int, Enum):
     NONE = 0
@@ -27,6 +37,15 @@ class Event(int, Enum):
 class Action(int, Enum):
     CONNECT = 0
     ANNOUNCE = 1
+
+class Config():
+    def __init__(self, best_tracker = False):
+        self.best_tracker = best_tracker
+
+    @staticmethod
+    def default() -> 'Config':
+        c = Config()
+        return c
 
 def get_udp_trackers(ben) -> (str, int):
     announce_list = ben["announce-list"]
@@ -41,8 +60,11 @@ def get_udp_trackers(ben) -> (str, int):
 
     return res
 
+def LOG_ERR(msg: str):
+    sys.stderr.write(f"Error: {msg}\n")
+
 class Client:
-    def __init__(self, bencode):
+    def __init__(self, bencode, config : Config = Config.default()):
         self.bencode = bencode
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.bind(("0.0.0.0", PORT))
@@ -58,6 +80,7 @@ class Client:
 
         self.tracker_adresses = get_udp_trackers(self.bencode)
         self.tracker_addr = (None, None)
+        self.config = config
 
     def get_left_bytes(self) -> int:
         if "length" in self.bencode:
@@ -119,33 +142,31 @@ class Client:
         return buf
 
     def send_announce_msg(self):
+        #print(self.state)
         assert self.state == State.CONNECTED
 
         announce_msg = self.create_announce_msg()
         try:
             print(f"Sending announce to tracker: {self.tracker_addr}")
             self.sock.sendto(announce_msg, self.tracker_addr)
+            self.state = State.WAITING_ANNOUNCE_RESPONSE
             return True
         except socket.error as e:
             sys.stderr.write(f"Error: {e.strerror}\n")
             return False
 
-
-    def try_trackers(self) -> bool:
+    # Connects to the first tracker that gives a reponse back.
+    def try_one_tracker(self) -> bool:
         assert self.state == State.IDDLE
-
         req_msg_buf, _= self.create_connection_request()
         for tracker_addr in self.tracker_adresses:
             self.sock.sendto(req_msg_buf, tracker_addr)
             try:
                 data, addr = self.sock.recvfrom(1024)
                 if self.process_connect_response(data):
+                    #This tracker responded sucessfully, we are connected now
                     self.state = State.CONNECTED
                     self.tracker_addr = tracker_addr
-
-                    if not self.send_announce_msg():
-                        return False
-
                     return True
 
             except socket.timeout as e:
@@ -153,18 +174,65 @@ class Client:
 
         return False
 
-    def process_read_event(self):
+    def process_announce_response(self, data, addr) -> bool:
+        if len(data) < 20:
+            LOG_ERR("Announce response with unsufficient bytes")
+            return False
+
+        fields = struct.unpack(">IIIII", data[:20])
+        action, transaction_id, interval, leechers, seeders = fields
+
+        if transaction_id != self.transaction_id:
+            LOG_ERR(f"Invalid transaction id received from tracker {self.tracker_addr}")
+            return False
+
+        if action != Action.ANNOUNCE:
+            LOG_ERR(f"Invalid action received from tracker {self.tracker_addr}")
+            return False
+
+        print(f"Seeders: {seeders}")
+        print(f"Leechers: {leechers}")
+        return True
+
+    def try_best_tracker(self):
+        assert self.state == State.IDDLE
+        self.state = State.BEST_TRACKER_DISCOVERY
+        req_msg_buf, _= self.create_connection_request()
+        for tracker_addr in self.tracker_adresses:
+            self.sock.sendto(req_msg_buf, tracker_addr)
+            try:
+                data, addr = self.sock.recvfrom(1024)
+                if self.process_connect_response(data):
+                    #This tracker responded sucessfully, we are connected now
+                    self.state = State.CONNECTED
+                    self.tracker_addr = tracker_addr
+                    #self.candidates += 0
+
+            except socket.timeout as e:
+                sys.stderr.write(f"Error: connection to {tracker_addr} {e}\n")
+
+        return False
+
+    def process_read_event(self) -> bool:
         data, addr = self.sock.recvfrom(1024)
-
-        if addr == self.tracker_addr:
-            print(f"Received {len(data)} bytes from tracker {self.tracker_addr}")
-
+        print(len(data))
+        if self.state == State.WAITING_ANNOUNCE_RESPONSE:
+            if not self.process_announce_response(data, addr):
+                return False
 
     def run_loop(self) -> bool:
-        if not self.try_trackers():
-            return False
-        assert self.state == State.CONNECTED
-        print(f"Connected to tracker: {self.tracker_addr}")
+        if not self.config.best_tracker:
+            if not self.try_one_tracker():
+                return False
+
+            assert self.state == State.CONNECTED
+            print(f"Connected to tracker: {self.tracker_addr}")
+
+            if not self.send_announce_msg():
+                return False
+        else:
+            sys.stderr.write(f"TODO: implement best tracker discovery\n")
+            sys.exit(1)
 
         self.sock.setblocking(0)
         intrested = [self.sock]

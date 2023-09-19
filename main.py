@@ -9,7 +9,7 @@ import numpy as np
 import struct
 import random
 
-from client import Client
+from client import Client, Config
 import utils
 
 LOCAL_ADDR = "0.0.0.0"
@@ -40,8 +40,11 @@ def load_torrent(fname):
 def main():
     torrent_data = load_torrent("big-buck-bunny.torrent")
     client = Client(torrent_data)
-    if client.run_loop():
-        print("Connected to Tracker")
+    try:
+        if client.run_loop():
+            print("Connected to Tracker")
+    except KeyboardInterrupt as e:
+        print("\nBye :)")
 
 if __name__ == '__main__':
     main()

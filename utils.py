@@ -1,4 +1,6 @@
 import struct
+import inspect
+import sys
 
 def pack_dict(data, buf = bytes()):
     if isinstance(data, dict):
